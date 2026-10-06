@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WhatsApp Order & Billing</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Arial,"Noto Sans Bengali",sans-serif;background:#f4f6f8;color:#18212b}
+    .wrap{max-width:1100px;margin:auto;padding:18px}
+    .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:16px;margin-bottom:16px}
+    h1,h2,h3{margin:0 0 12px}
+    input,textarea,button{width:100%;padding:12px;border-radius:10px;border:1px solid #cfd6dd;font-size:16px}
+    textarea{min-height:90px;resize:vertical}
+    button{cursor:pointer;border:0;background:#1677ff;color:white;font-weight:700}
+    button.danger{background:#d93025}
+    button.secondary{background:#5f6b76}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+    .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .customer{border:1px solid #e1e5e9;border-radius:12px;padding:12px;margin-top:10px}
+    .row{display:flex;gap:8px;flex-wrap:wrap}
+    .row>*{flex:1;min-width:130px}
+    .muted{color:#69747e;font-size:14px}
+    .stat{font-size:24px;font-weight:800}
+    .error{color:#b42318;margin-top:8px}
+    .ok{color:#067647;margin-top:8px}
+    .hidden{display:none}
+    .badge{display:inline-block;padding:5px 8px;border-radius:999px;background:#eef2f6;font-size:12px}
+    @media(max-width:750px){.grid,.two{grid-template-columns:1fr}.wrap{padding:10px}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="loginCard" class="card">
+    <h1>WhatsApp Order & Billing</h1>
+    <p class="muted">Admin Panel Login</p>
+    <form id="loginForm">
+      <input id="username" placeholder="Username" autocomplete="username" required>
+      <br><br>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+      <br><br>
+      <button>Login</button>
+      <div id="loginMsg"></div>
+    </form>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="card">
+      <div class="row">
+        <div><h1>📦 Order & Billing</h1><div class="muted">WhatsApp customer management</div></div>
+        <button id="logout" class="secondary" style="max-width:130px">Logout</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="muted">Active Customers</div><div id="sCustomers" class="stat">0</div></div>
+      <div class="card"><div class="muted">Today's Orders</div><div id="sOrders" class="stat">0</div></div>
+      <div class="card"><div class="muted">Today's Bills</div><div id="sSales" class="stat">0</div></div>
+      <div class="card"><div class="muted">Total Due</div><div id="sDue" class="stat">0</div></div>
+    </div>
+
+    <div class="card">
+      <h2>➕ Add / Restore Customer</h2>
+      <form id="customerForm">
+        <input type="hidden" id="customerId">
+        <div class="two">
+          <input id="cName" placeholder="Customer name" required>
+          <input id="cPhone" placeholder="WhatsApp number, e.g. 9665XXXXXXXX" required>
+        </div>
+        <br>
+        <div class="two">
+          <input id="cAddress" placeholder="Address">
+          <input id="cNotes" placeholder="Notes">
+        </div>
+        <br>
+        <div class="row">
+          <button id="saveCustomer">Save Customer</button>
+          <button type="button" id="cancelEdit" class="secondary">Clear</button>
+        </div>
+        <div id="customerMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <input id="search" placeholder="Search name or WhatsApp number">
+        <button id="refresh" style="max-width:130px">Refresh</button>
+      </div>
+      <div id="customers"></div>
+    </div>
+
+    <div id="selectedCard" class="card hidden">
+      <h2 id="selectedTitle">Customer</h2>
+      <div id="selectedInfo" class="muted"></div>
+      <br>
+
+      <div class="two">
+        <div class="card">
+          <h3>💰 Add Bill</h3>
+          <input id="billAmount" type="number" min="0.01" step="0.01" placeholder="Amount">
+          <br><br>
+          <input id="billNote" placeholder="Note">
+          <br><br>
+          <button id="sendBill">Save & Send Bill</button>
+          <div id="billMsg"></div>
+        </div>
+
+        <div class="card">
+          <h3>💵 Add Payment</h3>
+          <input id="payAmount" type="number" min="0.01" step="0.01" placeholder="Paid amount">
+          <br><br>
+          <input id="payNote" placeholder="Payment note">
+          <br><br>
+          <button id="savePayment">Save Payment</button>
+          <div id="payMsg"></div>
+        </div>
+      </div>
+
+      <h3>Ledger</h3>
+      <div id="ledger"></div>
+
+      <h3>Orders</h3>
+      <div id="orders"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let token = localStorage.getItem("wa_admin_token") || "";
+let selectedId = null;
+
+function showLogin() {
+  $("loginCard").classList.remove("hidden");
+  $("app").classList.add("hidden");
+}
+function showApp() {
+  $("loginCard").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  loadAll();
+}
+async function api(path, options={}) {
+  const headers = {"Content-Type":"application/json", ...(options.headers||{})};
+  if (token) headers.Authorization = "Bearer " + token;
+  const r = await fetch(path, {...options, headers});
+  const data = await r.json().catch(()=>({}));
+  if (r.status === 401) {
+    token = "";
+    localStorage.removeItem("wa_admin_token");
+    showLogin();
+  }
+  if (!r.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+
+$("loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("loginMsg").textContent = "";
+  try {
+    const data = await api("/api/login", {
+      method:"POST",
+      body:JSON.stringify({username:$("username").value,password:$("password").value})
+    });
+    token = data.token;
+    localStorage.setItem("wa_admin_token", token);
+    showApp();
+  } catch(e) {
+    $("loginMsg").className = "error";
+    $("loginMsg").textContent = e.message;
+  }
+});
+
+$("logout").onclick = () => {
+  token = "";
+  localStorage.removeItem("wa_admin_token");
+  showLogin();
+};
+
+async function loadDashboard() {
+  const d = await api("/api/dashboard");
+  $("sCustomers").textContent = d.customers;
+  $("sOrders").textContent = d.ordersToday;
+  $("sSales").textContent = Number(d.salesToday).toFixed(2);
+  $("sDue").textContent = Number(d.totalDue).toFixed(2);
+}
+
+async function loadCustomers() {
+  const q = encodeURIComponent($("search").value || "");
+  const list = await api("/api/customers?q=" + q);
+  const box = $("customers");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = '<p class="muted">No active customers found.</p>';
+    return;
+  }
+
+  for (const c of list) {
+    const div = document.createElement("div");
+    div.className = "customer";
+    div.innerHTML = `
+      <div class="row">
+        <div>
+          <strong>${esc(c.name)}</strong><br>
+          <span class="muted">+${esc(c.phone)}</span>
+        </div>
+        <div>
+          <span class="badge">Billed: ${Number(c.total_billed).toFixed(2)}</span>
+          <span class="badge">Paid: ${Number(c.total_paid).toFixed(2)}</span>
+          <span class="badge">Due: ${Number(c.due).toFixed(2)}</span>
+        </div>
+      </div>
+      <p class="muted">${esc(c.address || "")}</p>
+      <div class="row">
+        <button data-view="${c.id}">Open</button>
+        <button data-edit="${c.id}" class="secondary">Edit</button>
+        <button data-delete="${c.id}" class="danger">Remove</button>
+      </div>`;
+    box.appendChild(div);
+  }
+
+  box.querySelectorAll("[data-view]").forEach(b => b.onclick = () => selectCustomer(b.dataset.view));
+  box.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => editCustomer(b.dataset.edit));
+  box.querySelectorAll("[data-delete]").forEach(b => b.onclick = () => deleteCustomer(b.dataset.delete));
+}
+
+async function selectCustomer(id) {
+  selectedId = id;
+  const list = await api("/api/customers");
+  const c = list.find(x => String(x.id) === String(id));
+  if (!c) return;
+  $("selectedCard").classList.remove("hidden");
+  $("selectedTitle").textContent = "👤 " + c.name;
+  $("selectedInfo").textContent =
+    `+${c.phone} | Billed: ${Number(c.total_billed).toFixed(2)} | ` +
+    `Paid: ${Number(c.total_paid).toFixed(2)} | Due: ${Number(c.due).toFixed(2)}`;
+  await loadLedgerAndOrders();
+  window.scrollTo({top:$("selectedCard").offsetTop-10, behavior:"smooth"});
+}
+
+async function loadLedgerAndOrders() {
+  if (!selectedId) return;
+  const [ledger, orders] = await Promise.all([
+    api(`/api/customers/${selectedId}/ledger`),
+    api(`/api/customers/${selectedId}/orders`)
+  ]);
+
+  $("ledger").innerHTML = ledger.length ? ledger.map(x => `
+    <div class="customer">
+      <strong>${x.type === "bill" ? "📋 Bill" : "💵 Payment"}</strong>
+      — ${Number(x.amount).toFixed(2)}
+      <div class="muted">${esc(x.note || "")} | ${new Date(x.created_at).toLocaleString()}</div>
+    </div>`).join("") : '<p class="muted">No ledger entries.</p>';
+
+  $("orders").innerHTML = orders.length ? orders.map(x => `
+    <div class="customer">
+      <strong>Order #${x.id}</strong>
+      <div>${esc(x.message_text)}</div>
+      <div class="muted">${new Date(x.created_at).toLocaleString()}</div>
+    </div>`).join("") : '<p class="muted">No orders.</p>';
+}
+
+async function editCustomer(id) {
+  const list = await api("/api/customers");
+  const c = list.find(x => String(x.id) === String(id));
+  if (!c) return;
+  $("customerId").value = c.id;
+  $("cName").value = c.name;
+  $("cPhone").value = c.phone;
+  $("cAddress").value = c.address || "";
+  $("cNotes").value = c.notes || "";
+  $("saveCustomer").textContent = "Update Customer";
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+$("customerForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("customerMsg").textContent = "";
+  const id = $("customerId").value;
+  const body = {
+    name:$("cName").value,
+    phone:$("cPhone").value,
+    address:$("cAddress").value,
+    notes:$("cNotes").value
+  };
+  try {
+    await api(id ? `/api/customers/${id}` : "/api/customers", {
+      method:id ? "PUT" : "POST",
+      body:JSON.stringify(body)
+    });
+    $("customerMsg").className = "ok";
+    $("customerMsg").textContent = "Saved successfully.";
+    clearCustomerForm();
+    await loadAll();
+  } catch(e) {
+    $("customerMsg").className = "error";
+    $("customerMsg").textContent = e.message;
+  }
+});
+
+$("cancelEdit").onclick = clearCustomerForm;
+
+function clearCustomerForm() {
+  $("customerId").value = "";
+  $("cName").value = "";
+  $("cPhone").value = "";
+  $("cAddress").value = "";
+  $("cNotes").value = "";
+  $("saveCustomer").textContent = "Save Customer";
+}
+
+async function deleteCustomer(id) {
+  if (!confirm("Remove this customer? Old orders and accounts will remain in history.")) return;
+  try {
+    await api(`/api/customers/${id}`, {method:"DELETE"});
+    if (String(selectedId) === String(id)) {
+      selectedId = null;
+      $("selectedCard").classList.add("hidden");
+    }
+    await loadAll();
+  } catch(e) { alert(e.message); }
+}
+
+$("sendBill").onclick = async () => {
+  $("billMsg").textContent = "";
+  const amount = Number($("billAmount").value);
+  if (!amount || amount <= 0) return $("billMsg").textContent = "Enter amount.";
+  try {
+    const d = await api(`/api/customers/${selectedId}/bill`, {
+      method:"POST",
+      body:JSON.stringify({amount,note:$("billNote").value})
+    });
+    $("billMsg").className = "ok";
+    $("billMsg").textContent = `Saved. Current due: ${Number(d.due).toFixed(2)}`;
+    $("billAmount").value = "";
+    $("billNote").value = "";
+    await loadAll();
+    await selectCustomer(selectedId);
+  } catch(e) {
+    $("billMsg").className = "error";
+    $("billMsg").textContent = e.message;
+  }
+};
+
+$("savePayment").onclick = async () => {
+  $("payMsg").textContent = "";
+  const amount = Number($("payAmount").value);
+  if (!amount || amount <= 0) return $("payMsg").textContent = "Enter amount.";
+  try {
+    const d = await api(`/api/customers/${selectedId}/payment`, {
+      method:"POST",
+      body:JSON.stringify({amount,note:$("payNote").value})
+    });
+    $("payMsg").className = "ok";
+    $("payMsg").textContent = `Saved. Current due: ${Number(d.due).toFixed(2)}`;
+    $("payAmount").value = "";
+    $("payNote").value = "";
+    await loadAll();
+    await selectCustomer(selectedId);
+  } catch(e) {
+    $("payMsg").className = "error";
+    $("payMsg").textContent = e.message;
+  }
+};
+
+$("refresh").onclick = loadAll;
+$("search").addEventListener("input", () => loadCustomers());
+
+async function loadAll() {
+  await Promise.all([loadDashboard(), loadCustomers()]);
+}
+
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+if (token) showApp(); else showLogin();
+</script>
+</body>
+</html>
